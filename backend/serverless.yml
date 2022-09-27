@@ -1,0 +1,253 @@
+service:
+  name: serverless-article-app
+
+plugins:
+  - serverless-webpack
+  - serverless-aws-documentation
+  - serverless-reqvalidator-plugin
+provider:
+  name: aws
+  runtime: nodejs12.x
+
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+  tracing:
+    lambda: true
+    apiGateway: true
+
+  # Use these variables in the functions and resouorces section below. For example,
+  # ${self:provider.environment.ATTACHMENT_S3_BUCKET}
+  environment:
+    ARTICLES_TABLE: Articles-plus-${self:provider.stage}
+    ARTICLES_CREATED_AT_INDEX: CreatedAtIndex
+    ARTICLES_PUBLISH_INDEX: 'PublishIndex'
+    ATTACHMENT_S3_BUCKET: serverless-c004-article-images-${self:provider.stage}
+    SIGNED_URL_EXPIRATION: 300
+    IS_OFFLINE: false
+
+  iamRoleStatements:
+    # Allow functions to list all buckets
+    - Effect: Allow
+      Action: 's3:ListBucket'
+      Resource: '*'
+    # Allow functions to read/write objects in a bucket
+    - Effect: Allow
+      Action:
+        - s3:GetObject
+        - s3:PutObject
+      Resource:
+        - 'arn:aws:s3:::${self:provider.environment.ATTACHMENT_S3_BUCKET}/*'
+    - Effect: Allow
+      Action:
+        - dynamodb:Query
+        - dynamodb:PutItem
+        - dynamodb:GetItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+      Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.ARTICLES_TABLE}
+    - Effect: Allow
+      Action:
+        - dynamodb:Query
+      Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.ARTICLES_TABLE}/index/PublishIndex
+    - Effect: Allow
+      Action:
+        - xray:PutTelemetryRecords
+        - xray:PutTraceSegments
+      Resource: "*"
+      
+functions:
+
+  Auth:
+    handler: src/lambda/auth/auth0Authorizer.handler
+
+  GetArticlesPublish:
+    handler: src/lambda/http/getArticlesPublish.handler
+    events:
+      - http:
+          method: get
+          path: articles-publish/{publish}/{createdAt}
+          cors: true
+  GetArticles:
+    handler: src/lambda/http/getArticles.handler
+    events:
+      - http:
+          method: get
+          path: articles
+          cors: true
+          authorizer: Auth
+  # TODO: Configure this function -
+  # Provide iamRoleStatements property. Decide the Actions and AWS Resource.
+  # To refer to an AWS resource defined in the "Resources" section, you can use "Resource: !GetAtt <resource-name>.Arn"
+  # To validate incoming HTTP requests, we have provided the request schemas in function definition below.
+  CreateArticle:
+    handler: src/lambda/http/createArticle.handler
+    events:
+      - http:
+          method: post
+          path: articles
+          cors: true
+          authorizer: Auth
+          reqValidatorName: RequestBodyValidator
+          documentation:
+            summary: Create a new Article
+            description: Create a new Article
+            requestModels:
+              'application/json': ArticleCreate
+
+  # TODO: Configure this function
+  # Provide property for setting up CORS, Authorizer, iamRoleStatements, and request schemas
+  UpdateArticle:
+    handler: src/lambda/http/updateArticle.handler
+    events:
+      - http:
+          method: patch
+          path: articles/{articleId}
+          cors: true
+          authorizer: Auth
+          reqValidatorName: RequestBodyValidator
+          documentation:
+            summary: Update a Article
+            description: Update a Article
+            requestModels:
+              'application/json': ArticleUpdate
+
+  # TODO: Configure this function
+  # Provide property for setting up CORS, Authorizer, iamRoleStatements
+  DeleteArticle:
+    handler: src/lambda/http/deleteArticle.handler
+    events:
+      - http:
+          method: delete
+          path: articles/{articleId}
+          cors: true
+          authorizer: Auth
+
+  # TODO: Configure this function
+  # Provide property for setting up CORS, Authorizer, iamRoleStatements
+  GenerateUploadUrl:
+    handler: src/lambda/http/generateUploadUrl.handler
+    events:
+      - http:
+          method: post
+          path: articles/{articleId}/attachment
+          cors: true
+          authorizer: Auth
+
+resources:
+  Resources:
+    # Add necessary AWS resources. You will need at least the following AWS resources
+    # TODO: Fill the properties
+    # Feel free to change the names as you like.
+    GatewayResponseDefault4XX:
+      Type: AWS::ApiGateway::GatewayResponse
+      Properties:
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+          gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS,POST'"
+        ResponseType: DEFAULT_4XX
+        RestApiId:
+          Ref: ApiGatewayRestApi
+          
+
+    # TODO: Create a DynamoDB table with local secondary index and a composite key
+    ArticlesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: articleId
+            AttributeType: S
+          - AttributeName: publish
+            AttributeType: S
+          - AttributeName: createdAt
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+          - AttributeName: articleId
+            KeyType: RANGE
+        BillingMode: PAY_PER_REQUEST
+        TableName: ${self:provider.environment.ARTICLES_TABLE}
+        LocalSecondaryIndexes:
+          - IndexName: ${self:provider.environment.ARTICLES_CREATED_AT_INDEX}
+            KeySchema:
+              - AttributeName: userId
+                KeyType: HASH
+              - AttributeName: createdAt
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL # What attributes will be copied to an index
+        GlobalSecondaryIndexes:
+          - IndexName: ${self:provider.environment.ARTICLES_PUBLISH_INDEX}
+            KeySchema:
+              - AttributeName: publish
+                KeyType: HASH
+              - AttributeName: createdAt
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+
+    # TODO: Complete the bucket properties below.
+    # Do not forget to add the CorsConfiguration propoerty
+    AttachmentsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:provider.environment.ATTACHMENT_S3_BUCKET}
+      # Set the CORS policy
+        CorsConfiguration:
+          CorsRules:
+            -
+              AllowedOrigins:
+                - '*'
+              AllowedHeaders:
+                - '*'
+              AllowedMethods:
+                - GET
+                - PUT
+                - POST
+                - DELETE
+                - HEAD
+              MaxAge: 3000
+
+    # TODO: Complete the policy below and attach it to the bucket defined above
+    # For cross referencing the name of the bucket, use "!Ref AttachmentsBucket"
+    BucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        PolicyDocument:
+          Id: MyPolicy
+          Version: '2012-10-17'
+          Statement:
+            - Sid: PublicReadForGetBucketObjects
+              Effect: Allow
+              Principal: '*'
+              Action: 's3:GetObject'
+              Resource: 'arn:aws:s3:::${self:provider.environment.ATTACHMENT_S3_BUCKET}/*'
+        Bucket: !Ref AttachmentsBucket
+    RequestBodyValidator:
+      Type: AWS::ApiGateway::RequestValidator
+      Properties:
+        Name: 'request-body-validator'
+        RestApiId:
+          Ref: ApiGatewayRestApi
+        ValidateRequestBody: true
+        ValidateRequestParameters: true
+
+custom:
+  documentation:
+    api:
+      info:
+        version: v1.0.0
+        title: Udagram API
+        description: Serverless application for articles
+    models:
+      - name: ArticleCreate
+        contentType: application/json
+        schema: ${file(models/create-article-model.json)}
+      - name: ArticleUpdate
+        contentType: application/json
+        schema: ${file(models/update-article-model.json)}
+
