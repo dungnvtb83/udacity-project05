@@ -1,4 +1,4 @@
-# Serverless ARTICLE 011222
+# Serverless ARTICLE 011
 
 To implement this project, you need to implement a simple ARTICLE application using AWS Lambda and Serverless framework. Search for all comments starting with the `ARTICLE:` in the code to find the placeholders that you need to implement.
 
